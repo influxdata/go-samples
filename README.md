@@ -10,10 +10,6 @@ go get github.com/influxdata/influxdb-client-go/v2
 
 You will need Go 1.17 or later.
 
-# Create a Token
-
-_No change._
-
 # Initialize Client
 
 Paste following code in your `main.go` file:

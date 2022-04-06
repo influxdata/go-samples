@@ -78,3 +78,26 @@ if err := results.Err(); err != nil {
     log.Fatal(err)
 }
 ```
+
+# Execute an Aggregate Query
+
+Add the following to your `main` function:
+
+```go
+org := "gcabbage+stag02-us-east-1@influxdata.com"
+queryAPI := client.QueryAPI(org)
+query := `from(bucket: "externalwrites")
+              |> range(start: -10m)
+              |> filter(fn: (r) => r._measurement == "measurement1")
+              |> mean()`
+results, err := queryAPI.Query(context.Background(), query)
+if err != nil {
+    log.Fatal(err)
+}
+for results.Next() {
+    fmt.Println(results.Record())
+}
+if err := results.Err(); err != nil {
+    log.Fatal(err)
+}
+```

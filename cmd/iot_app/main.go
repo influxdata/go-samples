@@ -15,11 +15,14 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+	"github.com/influxdata/influxdb-client-go/v2/api/write"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/mattn/go-sqlite3" // Need the sqlite3 driver.
@@ -181,6 +184,24 @@ func queryData(cl influxdb2.Client) string {
 	return string(responseBytes)
 }
 
+// Writes a random data point.
+func writeData(cl influxdb2.Client) {
+	writeApi := cl.WriteAPIBlocking(orgId, bucket)
+
+	tags := map[string]string{
+		"tagname1": "tagvalue1",
+	}
+	const numberRange = 128
+	fields := map[string]interface{}{
+		"field1": rand.Float32()*numberRange - numberRange*0.5,
+	}
+
+	point := write.NewPoint("measurement1", tags, fields, time.Now())
+	if err := writeApi.WritePoint(context.Background(), point); err != nil {
+		log.Fatal(err)
+	}
+}
+
 // HTML templates
 type Template struct {
 	templates *template.Template
@@ -210,15 +231,14 @@ func setupWebHandlers(e *echo.Echo) {
 
 		// Query the login database to see if the credentials match.
 		if tryLoginCredentials(email, password) {
-			fmt.Println("SUCCESS")
+			fmt.Println("Login success")
 			return c.Redirect(http.StatusSeeOther, "profile")
 		} else {
-			fmt.Println("FAILED")
+			fmt.Println("Login failed")
 			return c.String(http.StatusForbidden, "Invalid login")
 		}
 	})
 	e.GET("/profile", func(c echo.Context) error {
-		fmt.Println("Profile render")
 		// Maybe a better way to do this. Flask has @login_required.
 		if !activeUser.valid {
 			fmt.Println("Not logged in, redirecting to login page.")
@@ -236,6 +256,11 @@ func setupWebHandlers(e *echo.Echo) {
 		data := queryData(client)
 		queryJson = data
 		return c.JSON(http.StatusOK, queryJson)
+	})
+	// Invoked when the Write Data button is pressed.
+	e.GET("/graph_write_data", func(c echo.Context) error {
+		writeData(client)
+		return c.JSON(http.StatusOK, "") // Empty write.
 	})
 }
 

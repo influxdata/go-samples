@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -23,22 +24,24 @@ import (
 // - A token
 // - A bucket name
 var (
-	// organizationName is used by InfluxDB to group resources such as tasks, buckets, etc.
+	// organizationName specifies your InfluxDB organization.
+	// Organizations are used by InfluxDB to group resources such as users,
+	// tasks, buckets, dashboards and more.
 	organizationName = os.Getenv("INFLUXDB_ORGANIZATION")
-	// host is the URL where your instance of InfluxDB runs.
+	// host is the URL of your InfluxDB instance or Cloud environment.
 	// This is also the URL where you reach the UI for your account.
 	host = os.Getenv("INFLUXDB_HOST")
 	// token appropriately scoped to access the resources needed by your app.
-	// For ease of use in this example, we will use an all access token.
-	// Note that you should not store the token in source code in a real application, but rather use a proper secrets store.
+	// For ease of use in this example, you should use an "all access" token.
+	// In a production application, you should use a properly scoped token to
+	// access only the resources needed by your application and store it securely.
 	// More information about permissions and tokens can be found here:
 	// https://docs.influxdata.com/influxdb/v2.1/security/tokens/
 	token = os.Getenv("INFLUXDB_TOKEN")
-	// bucketName is required for the write_api.
-	// A bucket is where you store data, and you can
-	// group related data into a bucket.
+	// bucketName specifies an InfluxDB bucket in your organization.
+	// A bucket is where you store data, and you can group related data into a bucket.
 	// You can also scope permissions to the bucket level as well.
-	bucketName = "raw_data_bucket"
+	bucketName = os.Getenv("INFLUXDB_BUCKET")
 
 	// client for accessing InfluxDB
 	client   influxdb2.Client
@@ -53,18 +56,19 @@ func init() {
 	queryAPI = client.QueryAPI(organizationName)
 }
 
+// main starts your Go application and begins listening on port 8080.
 func main() {
-	findOrCreateBucket(bucketName)
-
+	// Register some routes for your application. Check out the documentation of
+	// each function registered below for more details on how it works.
 	http.HandleFunc("/", welcome)
-	http.HandleFunc("/ingest", ingest)
-	http.HandleFunc("/query", query)
-	http.HandleFunc("/tasks", tasks)
-	http.HandleFunc("/monitor", monitor)
+	http.HandleFunc("/ingest", ingest) // Ingest application user data.
+	http.HandleFunc("/query", query)   // Query application user data.
+	http.HandleFunc("/setup", setup)   // Set up a new user of your application.
 
 	// Serve the routes configured above on port 8080.
 	// Note that while this app uses Go's HTTP defaults for brevity, a real-world
-	// production app should use a server with properly configured timeouts, etc.
+	// production app exposed on the internet should use a server with properly
+	// configured timeouts, certificates, etc.
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -72,15 +76,18 @@ func welcome(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("<p>Welcome to your first InfluxDB Application</p>"))
 }
 
-// ingest data to InfluxDB.
+// ingest data for a user to InfluxDB.
 //
-// POST the following data to this function to test:
+// Note that "user" here refers to a user in your application, not an InfluxDB user.
+//
+// POST the following data to the /ingest endpoint to test this function:
 // {"user_id":"user1", "measurement":"measurement1","field1":1.0}
 //
 // A point requires at a minimum: A measurement, a field, and a value.
-// A measurement is the top level organization for points in a bucket, similar to a table in a relational database.
-// A field and its related value are similar to a column and value in a relational database.
-// The user_id will be used to "tag" each point, so that your queries can easily find the data for each separate user.
+// Where a bucket is similar to a database in a relational database, a measurement is similar
+// to a table and a field and its related value are similar to a column and value.
+// The user_id will be used to "tag" each point, so that your queries can easily find the
+// data for each separate user.
 //
 // You can write any number of tags and fields in a single point, but only one measurement
 // To understand how measurements, tag values, and fields define points and series, follow this link:
@@ -91,7 +98,7 @@ func welcome(w http.ResponseWriter, r *http.Request) {
 func ingest(w http.ResponseWriter, r *http.Request) {
 
 	// Parse the JSON request body.
-	// Your real code should authorize the user, and ensure that the user_id matches the authorization.
+	// Production code should authorize the user, and ensure that the user_id matches the authorization.
 	var request struct {
 		UserID      string  `json:"user_id"`
 		Measurement string  `json:"measurement"`
@@ -122,19 +129,20 @@ func ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// To view the data that you are writing in the UI, you can use the data explorer
-	// Follow this link:
-	// TODO: Insert the appropriate /me/ link here.
+	// You can view the data written by this function by navigating to the InfluxDB UI
+	// for your account and using the Data Explorer.
 }
 
-// query serves all data for the user in the last hour in JSON format.
+// query serves down sampled data for a user in JSON format.
+//
+// Note that "user" here refers to a user in your application, not an InfluxDB user.
 //
 // POST the following to test this endpoint:
 // {"user_id":"user1"}
 func query(w http.ResponseWriter, r *http.Request) {
 
 	// Parse the JSON request body.
-	// Your real code should authorize the user, and ensure that the user_id matches the authorization.
+	// Production code should authorize the user, and ensure that the user_id matches the authorization.
 	var request struct {
 		UserID string `json:"user_id"`
 	}
@@ -201,11 +209,31 @@ func query(w http.ResponseWriter, r *http.Request) {
 	w.Write(responseBytes)
 }
 
-// tasks creates a task owned by the requested user.
+// setup creates a task owned by the requested user that will down sample their data and write
+// the min, max and mean of each field of each measurement to a new measurement every five minutes.
+//
+// Note that "user" here refers to a user in your application, not an InfluxDB user.
 //
 // POST the following to test this endpoint:
 // {"user_id":"user1"}
-func tasks(w http.ResponseWriter, r *http.Request) {
+func setup(w http.ResponseWriter, r *http.Request) {
+
+	// Parse the JSON request body.
+	// Production code should authorize the user, and ensure that the user_id matches the authorization.
+	var request struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	taskQuery := fmt.Sprintf(`option task = {name "%s_task", every: 5m}
+	
+	from(bucket: %q)
+		|> range(start: -task.every)
+		|> filter(fn: (r) => r.user_id == %q
+	`, request.UserID, bucketName, request.UserID
 
 	//# ensure there is a bucket to copy the data into
 	//find_or_create_bucket("processed_data_bucket")
@@ -232,7 +260,7 @@ func tasks(w http.ResponseWriter, r *http.Request) {
 	//"""
 	//
 	//if request.method == "POST":
-	//# Your real code should authorize the user, and ensure that the user_id matches the authorization.
+	//# Production code should authorize the user, and ensure that the user_id matches the authorization.
 	//user_id = request.json["user_id"]
 	//# If you prefer to try this without posting the data,
 	//# uncomment the following line and comment out the above line
@@ -262,9 +290,4 @@ func tasks(w http.ResponseWriter, r *http.Request) {
 	//else:
 	//return response.text, response.status_code
 	panic("not implemented")
-}
-
-// findOrCreateBucket is it does not exist.
-func findOrCreateBucket(name string) {
-
 }

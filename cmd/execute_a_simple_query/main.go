@@ -11,15 +11,15 @@ import (
 
 func main() {
 	token := os.Getenv("INFLUXDB_TOKEN")
-	url := "https://eastus-2-stag.azure.cloud2.influxdata.com"
+	url := os.Getenv("INFLUXDB_HOST")
 	client := influxdb2.NewClient(url, token)
 
-	// New code
-	org := "gcabbage+stag02-us-east-1@influxdata.com"
+	org := os.Getenv("INFLUXDB_ORGANIZATION")
 	queryAPI := client.QueryAPI(org)
-	query := `from(bucket: "externalwrites")
+	bucket := os.Getenv("INFLUXDB_BUCKET")
+	query := fmt.Sprintf(`from(bucket: %q)
 				|> range(start: -10m)
- 				|> filter(fn: (r) => r._measurement == "measurement1")`
+ 				|> filter(fn: (r) => r._measurement == "measurement1")`, bucket)
 	results, err := queryAPI.Query(context.Background(), query)
 	if err != nil {
 		log.Fatal(err)
@@ -31,18 +31,3 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
-/* Python source:
-
-query_api = client.query_api()
-
-query = """from(bucket: "externalwrites")
- |> range(start: -10m)
- |> filter(fn: (r) => r._measurement == "measurement1")"""
-tables = query_api.query(query, org="gcabbage+stag02-us-east-1@influxdata.com")
-
-for table in tables:
-  for record in table.records:
-    print(record)
-
-*/

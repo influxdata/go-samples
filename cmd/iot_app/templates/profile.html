@@ -1,0 +1,58 @@
+<!-- templates/profile.html -->
+
+<div class="column is-4 is-offset-4">
+  <h3 class="title">
+  Welcome, GET_NAME_VAR!
+  </h3>
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+<script type=text/javascript>
+        $(function() {
+          $('a#write_data').on('click', function(e) {
+            e.preventDefault()
+            $.getJSON('/graph_write_data',
+                function(data) {
+              //do nothing
+            });
+            return false;
+          });
+        });
+</script>
+<script type=text/javascript>
+        $(function() {
+          $('a#quert_data').on('click', function(e) {
+            e.preventDefault()
+            $.getJSON('/graph_query_data',
+                function(data) {
+              //do nothing
+            });
+            return false;
+          });
+        });
+</script>
+  <div class="box">
+      <form method="POST">
+        <a href=# id=write_data><button class="button is-block is-info is-large is-fullwidth">Write Data</button></a>
+      </form>
+      <form method="GET">
+        <a href=# id=query_data><button class="button is-block is-info is-large is-fullwidth">Visualize Data</button></a>
+      </form>
+  </div>
+</div>
+<body>
+
+</body>
+
+<footer>
+    <!-- D3.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.6/d3.min.js"></script>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+
+    <script type="text/javascript">
+
+       
+
+    </script>
+</footer>

@@ -41,7 +41,10 @@ func setupWebHandlers(e *echo.Echo) {
 		fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
 
 		// #TODO: validate credentials and handle accordingly.
-		return c.String(http.StatusOK, "temp")
+		return c.Redirect(http.StatusSeeOther, "profile")
+	})
+	e.GET("/profile", func(c echo.Context) error {
+		return c.Render(http.StatusOK, "profile.html", nil)
 	})
 }
 

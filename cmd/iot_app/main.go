@@ -207,22 +207,6 @@ func createWebserver() {
 	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
-func getEnvVar(name string, fallback string) string {
-	v := os.Getenv(name)
-	if len(v) == 0 {
-		if len(fallback) == 0 {
-			fmt.Println("Missing required environment variable", name)
-			panic(nil)
-		}
-		fmt.Println("Missing environment variable", name, ", defaulting to", fallback)
-		v = fallback
-	} else {
-		fmt.Println("Found environment variable", name, "=", v)
-	}
-
-	return v
-}
-
 func main() {
 	activeUser.valid = false
 	go createDefaultLoginDB()
@@ -231,10 +215,10 @@ func main() {
 	go createWebserver()
 
 	// Retrieve variables from the environment or use defaults.
-	url := getEnvVar("INFLUXDB_URL", "twodotoh-dev-andrew20220517115401.remocal.influxdev.co")
-	orgId := getEnvVar("INFLUXDB_ORGID", "9c5955fc99a60b8f")
-	bucket := getEnvVar("INFLUX_BUCKET", "devbucket")
-	token := getEnvVar("INFLUXDB_TOKEN", "")
+	url := os.Getenv("INFLUXDB_URL")
+	orgId := os.Getenv("INFLUXDB_ORGID")
+	bucket := os.Getenv("INFLUX_BUCKET")
+	token := os.Getenv("INFLUXDB_TOKEN")
 
 	// Url formatting.
 	httpsPrefix := "https://"

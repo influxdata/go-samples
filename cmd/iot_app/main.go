@@ -4,8 +4,11 @@ package main
 // Using Echo instead of Flask for a webserver.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -78,7 +81,7 @@ func createDefaultLoginDB() {
 	}
 }
 
-func tryLoginCredentials(user string, password string) bool {
+func tryLoginCredentials(user string, plainPassword string) bool {
 	db, err := sql.Open("sqlite3", loginDatabase)
 	if err != nil {
 		log.Fatal(err)
@@ -102,6 +105,22 @@ func tryLoginCredentials(user string, password string) bool {
 		err = result.Scan(&id, &email, &password, &name, &readToken, &writeToken)
 		if err != nil {
 			log.Fatal(err)
+		}
+
+		hasher := sha256.New()
+		hasher.Write([]byte(plainPassword))
+		hash := hasher.Sum(nil)
+
+		password = strings.TrimPrefix(password, "sha256$")
+		decoded, err := hex.DecodeString(password)
+		if err != nil {
+			fmt.Println("Failed to decode password hash:", err)
+			return false
+		}
+
+		if bytes.Compare(hash, decoded) != 0 {
+			fmt.Println("Incorrect password.")
+			return false
 		}
 
 		var newUser User

@@ -191,10 +191,10 @@ func query(w http.ResponseWriter, r *http.Request) {
 	var currentTable *Table
 	for tables.Next() {
 		if tables.TableChanged() || currentTable == nil {
-			response.Tables = append(response.Tables, *currentTable)
 			currentTable = &Table{
 				Metadata: tables.TableMetadata().String(),
 			}
+			response.Tables = append(response.Tables, *currentTable)
 		}
 		currentTable.Records = append(currentTable.Records, tables.Record().String())
 	}

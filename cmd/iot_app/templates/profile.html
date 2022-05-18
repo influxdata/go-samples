@@ -19,11 +19,11 @@
 </script>
 <script type=text/javascript>
         $(function() {
-          $('a#quert_data').on('click', function(e) {
+          $('a#query_data').on('click', function(e) {
             e.preventDefault()
             $.getJSON('/graph_query_data',
                 function(data) {
-              //do nothing
+                    document.getElementById("query").innerHTML = data
             });
             return false;
           });
@@ -34,7 +34,7 @@
         <a href=# id=write_data><button class="button is-block is-info is-large is-fullwidth">Write Data</button></a>
       </form>
       <form method="GET">
-        <a href=# id=query_data><button class="button is-block is-info is-large is-fullwidth">Visualize Data</button></a>
+        <a href=# id=query_data><button class="button is-block is-info is-large is-fullwidth">Query Data</button></a>
       </form>
   </div>
 </div>
@@ -43,16 +43,8 @@
 </body>
 
 <footer>
-    <!-- D3.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.6/d3.min.js"></script>
-    <!-- jQuery -->
-    <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
-    <!-- Plotly.js -->
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-
-    <script type="text/javascript">
-
-       
-
-    </script>
+    <h4 id=query>
+        <!-- Just dump the full json, could use plotly or something similar to generate a graph too. -->
+        {{index . "queryJson"}}
+    </h4>
 </footer>

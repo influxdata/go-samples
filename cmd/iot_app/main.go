@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -32,8 +33,11 @@ type User struct {
 	writeToken string
 }
 
-// Maybe not the best choice...
 var activeUser User
+var client influxdb2.Client
+var orgId string
+var bucket string
+var queryJson string
 
 const loginDatabase = "logins.db"
 
@@ -62,6 +66,7 @@ func createDefaultLoginDB() {
 			return
 		}
 
+		fmt.Println()
 		fmt.Println("Creating default user with login:\n\tEmail: mickey@mouse.com\n\tPassword: pass")
 		fmt.Println("Note that this account will not be able to access your influxdb organization.")
 		fmt.Println()
@@ -139,6 +144,43 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 	return false
 }
 
+// Returns a json representation of the query.
+func queryData(cl influxdb2.Client) string {
+	queryApi := cl.QueryAPI(orgId)
+
+	query := fmt.Sprintf(`from(bucket: "%s")
+							|> range(start: -100h)`, bucket)
+	results, err := queryApi.Query(context.Background(), query)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	type Table struct {
+		Metadata string   `json:"metadata"`
+		Records  []string `json:"records"`
+	}
+	var response struct {
+		Tables []Table `json:"tables"`
+	}
+	var currentTable *Table
+	for results.Next() {
+		if results.TableChanged() || currentTable == nil {
+			currentTable = &Table{
+				Metadata: results.TableMetadata().String(),
+			}
+			response.Tables = append(response.Tables, *currentTable)
+		}
+		currentTable.Records = append(currentTable.Records, results.Record().String())
+	}
+
+	responseBytes, err := json.Marshal(&response)
+	if err != nil {
+		return "Error"
+	}
+
+	return string(responseBytes)
+}
+
 // HTML templates
 type Template struct {
 	templates *template.Template
@@ -176,6 +218,7 @@ func setupWebHandlers(e *echo.Echo) {
 		}
 	})
 	e.GET("/profile", func(c echo.Context) error {
+		fmt.Println("Profile render")
 		// Maybe a better way to do this. Flask has @login_required.
 		if !activeUser.valid {
 			fmt.Println("Not logged in, redirecting to login page.")
@@ -183,13 +226,16 @@ func setupWebHandlers(e *echo.Echo) {
 		}
 
 		return c.Render(http.StatusOK, "profile.html", map[string]interface{}{
-			"name": activeUser.name,
+			"name":      activeUser.name,
+			"queryJson": queryJson,
 		})
 	})
 
+	// Invoked when the Query Data button is pressed.
 	e.GET("/graph_query_data", func(c echo.Context) error {
-		// ???
-		return c.String(http.StatusOK, "query data..?")
+		data := queryData(client)
+		queryJson = data
+		return c.JSON(http.StatusOK, queryJson)
 	})
 }
 
@@ -214,10 +260,10 @@ func main() {
 	// Run the webserver in a goroutine.
 	go createWebserver()
 
-	// Retrieve variables from the environment or use defaults.
+	// Retrieve variables from the environment.
 	url := os.Getenv("INFLUXDB_HOST")
-	orgId := os.Getenv("INFLUXDB_ORGANIZATION_ID")
-	bucket := os.Getenv("INFLUX_BUCKET")
+	orgId = os.Getenv("INFLUXDB_ORGANIZATION_ID")
+	bucket = os.Getenv("INFLUX_BUCKET")
 	token := os.Getenv("INFLUXDB_TOKEN")
 
 	// Url formatting.
@@ -226,27 +272,7 @@ func main() {
 		url = strings.Join([]string{httpsPrefix, url}, "")
 	}
 
-	client := influxdb2.NewClient(url, token)
-	queryApi := client.QueryAPI(orgId)
-	// Could use the authorizations API to get auth details from the actual database.
-	//authApi := client.AuthorizationsAPI()
-
-	query := fmt.Sprintf(`from(bucket: "%s")
-							|> range(start: -100h)`, bucket)
-
-	results, err := queryApi.Query(context.Background(), query)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// #TODO: feed into a channel, which is read in the profile GET?
-	for results.Next() {
-		fmt.Println("RESULT: ", results.Record())
-	}
-
-	if err := results.Err(); err != nil {
-		log.Fatal(err)
-	}
+	client = influxdb2.NewClient(url, token)
 
 	// Sleep forever, don't want to kill the webserver as soon as we launch it.
 	select {}

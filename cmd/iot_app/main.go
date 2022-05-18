@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -16,6 +18,7 @@ import (
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	_ "github.com/mattn/go-sqlite3" // Need the sqlite3 driver.
 )
 
 type User struct {
@@ -28,6 +31,94 @@ type User struct {
 
 // Maybe not the best choice...
 var activeUser User
+
+const loginDatabase = "logins.db"
+
+func createDefaultLoginDB() {
+	// If we don't have a login database yet, create one with a default user account.
+	if _, err := os.Stat(loginDatabase); errors.Is(err, os.ErrNotExist) {
+		fmt.Println("Failed to find logins database, creating a new one.")
+		db, err := sql.Open("sqlite3", loginDatabase)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+
+		create := `CREATE TABLE user(
+			id INTEGER NOT NULL,
+			email VARCHAR(100),
+			password VARCHAR(100),
+			name VARCHAR(1000),
+			readToken VARCHAR(100),
+			writeToken VARCHAR(100),
+			PRIMARY KEY (id),
+			UNIQUE (email))`
+		_, err = db.Exec(create)
+		if err != nil {
+			fmt.Printf("Login table create failed: %q\n", err)
+			return
+		}
+
+		fmt.Println("Creating default user with login:\n\tEmail: mickey@mouse.com\n\tPassword: pass")
+		fmt.Println("Note that this account will not be able to access your influxdb organization.")
+		fmt.Println()
+
+		insert := `INSERT INTO user VALUES(
+			1,
+			'mickey@mouse.com',
+			'sha256$d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1',
+			'mickey',
+			'fVYoLl13o0ET6rhOEfpZoKcoOWofA9GE-Dv5P_EWI41fguTOoLuVD5HeGVEfgRVeF9xnYxh-sLcZEXGBkEFuWQ==',
+			'xOsoCvepHZzTLdr4WtWyoKNZ8KB-fzJ_4fvQpHIWS8GpBH7GqPP6dyock2cz1oVt5zar--N0AQ6frYBOYfevZg==')`
+		_, err = db.Exec(insert)
+		if err != nil {
+			fmt.Printf("Login user insert failed: %q\n", err)
+			return
+		}
+	}
+}
+
+func tryLoginCredentials(user string, password string) bool {
+	db, err := sql.Open("sqlite3", loginDatabase)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	query := fmt.Sprintf(`SELECT * FROM user WHERE email='%s'`, user)
+	result, err := db.Query(query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer result.Close()
+
+	for result.Next() {
+		var id int
+		var email string
+		var password string
+		var name string
+		var readToken string
+		var writeToken string
+		err = result.Scan(&id, &email, &password, &name, &readToken, &writeToken)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		var newUser User
+		newUser.valid = true
+		newUser.name = name
+		newUser.email = email
+		newUser.readToken = readToken
+		newUser.writeToken = writeToken
+
+		activeUser = newUser
+
+		return true
+	}
+
+	// No matches.
+	return false
+}
 
 // HTML templates
 type Template struct {
@@ -56,13 +147,14 @@ func setupWebHandlers(e *echo.Echo) {
 		password := c.FormValue("password")
 		fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
 
-		// Login successful, update the active user.
-		activeUser.valid = true
-		activeUser.name = "<unknown>" // #TODO: retrieve from db?
-		activeUser.email = email
-
-		// #TODO: validate credentials and handle accordingly.
-		return c.Redirect(http.StatusSeeOther, "profile")
+		// Query the login database to see if the credentials match.
+		if tryLoginCredentials(email, password) {
+			fmt.Println("SUCCESS")
+			return c.Redirect(http.StatusSeeOther, "profile")
+		} else {
+			fmt.Println("FAILED")
+			return c.String(http.StatusForbidden, "Invalid login")
+		}
 	})
 	e.GET("/profile", func(c echo.Context) error {
 		// Maybe a better way to do this. Flask has @login_required.
@@ -114,6 +206,7 @@ func getEnvVar(name string, fallback string) string {
 
 func main() {
 	activeUser.valid = false
+	go createDefaultLoginDB()
 
 	// Run the webserver in a goroutine.
 	go createWebserver()
@@ -134,8 +227,6 @@ func main() {
 	queryApi := client.QueryAPI(orgId)
 	// Could use the authorizations API to get auth details from the actual database.
 	//authApi := client.AuthorizationsAPI()
-
-	// Determine the user. There could be many, just select the first we find.
 
 	query := fmt.Sprintf(`from(bucket: "%s")
 							|> range(start: -100h)`, bucket)

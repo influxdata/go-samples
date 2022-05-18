@@ -59,7 +59,6 @@ func main() {
 	http.HandleFunc("/", welcome)
 	http.HandleFunc("/ingest", ingest)
 	http.HandleFunc("/query", query)
-	http.HandleFunc("/visualize", visualize)
 	http.HandleFunc("/tasks", tasks)
 	http.HandleFunc("/monitor", monitor)
 
@@ -75,7 +74,7 @@ func welcome(w http.ResponseWriter, r *http.Request) {
 
 // ingest data to InfluxDB.
 //
-// Post the following data to this function to test:
+// POST the following data to this function to test:
 // {"user_id":"user1", "measurement":"measurement1","field1":1.0}
 //
 // A point requires at a minimum: A measurement, a field, and a value.
@@ -130,7 +129,7 @@ func ingest(w http.ResponseWriter, r *http.Request) {
 
 // query serves all data for the user in the last hour in JSON format.
 //
-// Post the following to test this endpoint:
+// POST the following to test this endpoint:
 // {"user_id":"user1"}
 func query(w http.ResponseWriter, r *http.Request) {
 
@@ -144,23 +143,21 @@ func query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//# Queries can be written in either Flux or InfluxQL.
-	//# Simple queries are in the format of from() |> range() |> filter()
-	//# Flux can also be used to do complex data transformations as well as integrations.
-	//# Follow this link to learn more about using Flux:
-	//# https://awesome.influxdata.com/docs/part-2/introduction-to-flux/
+	// Queries can be written in either Flux or InfluxQL.
+	// Here we use a parameterized Flux query.
 	//
-	//# Set up the arguments for the query parameters
-	//params = {"bucket_name": bucket_name, "user_id": user_id}
+	// Simple queries are in the format of from() |> range() |> filter()
+	// Flux can also be used to do complex data transformations as well as integrations.
+	// Follow this link to learn more about using Flux:
+	// https://awesome.influxdata.com/docs/part-2/introduction-to-flux/
 	params := map[string]string{
 		"bucket_name": bucketName,
 		"user_id":     request.UserID,
 	}
 	query := `from(bucket: bucket_name) |> range(start: -1h) |> filter(fn: (r) => r.user_id == user_id)`
 
-	// Execute the query with the query api, and a stream of tables will be returned
-	// If it encounters problems, the query() method will throw an ApiException.
-	// In this case, we are simply going to return all errors to the user but not handling exceptions
+	// The query API offers the ability to retrieve raw data via QueryRaw and QueryRawWithParams, or
+	// a parsed representation via Query and QueryWithParams. We use the latter here.
 	tables, err := queryAPI.QueryWithParams(r.Context(), query, params)
 	if err != nil {
 		// You can build on this code to interpret errors from the InfluxDB API and
@@ -174,52 +171,39 @@ func query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use the parsed representation of the query results to iterate over the tables and records
+	// and structure them appropriately for marshalling into JSON.
+	type Table struct {
+		Metadata string   `json:"metadata"`
+		Records  []string `json:"records"`
+	}
+	var response struct {
+		Tables []Table `json:"tables"`
+	}
+	var currentTable *Table
 	for tables.Next() {
-		tables.
+		if tables.TableChanged() || currentTable == nil {
+			response.Tables = append(response.Tables, *currentTable)
+			currentTable = &Table{
+				Metadata: tables.TableMetadata().String(),
+			}
+		}
+		currentTable.Records = append(currentTable.Records, tables.Record().String())
 	}
 
-	//# the data will be returned as Python objects so you can iterate the data and do what you want
-	//for table in tables:
-	//for record in table.records:
-	//print(record)
-	//
-	//# You can use the built in encoder to return results in json
-	//output = json.dumps(tables, cls=FluxStructureEncoder, indent=2)
-	//return output, 200
-	panic("not implemented")
+	// Marshal the response into JSON and return it to the client.
+	responseBytes, err := json.Marshal(&response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("ContentType", "application/json")
+	w.Write(responseBytes)
 }
 
-// visualize serves a visualization (graph) instead of just data.
+// tasks creates a task owned by the requested user.
 //
-// Send the username as an argument from the web browser to test this endpoint:
-// 127.0.0.1:8080/visualize?user_name=user1
-func visualize(w http.ResponseWriter, r *http.Request) {
-
-	//# Your real code should authorize the user, and ensure that the user_id matches the authorization.
-	//user_id = request.args.get("user_name")
-	//
-	//# uncomment the following line and comment out the above line if you prefer to try this without posting the data
-	//# user_id = "user1"
-	//
-	//# Query using Flux as in the /query end point
-	//params = {"bucket_name": bucket_name, "user_id": user_id}
-	//query = "from(bucket: bucket_name) |> range(start: -1h) |> filter(fn: (r) => r.user_id == user_id)"
-	//
-	//# This example users plotly and pandas to create the visualization
-	//# You can learn more about using InfluxDB with Pandas by following this link:
-	//#
-	//# InfluxDB supports any visualization library you choose, you can learn more about visualizing data following this link:
-	//#
-	//data_frame = query_api.query_data_frame(query, organization_name, params=params)
-	//graph = px.line(data_frame, x="_time", y="_value", title="my graph")
-	//
-	//return graph.to_html(), 200
-	panic("not implemented")
-}
-
-// tasks serves the list of those owned by the requested user.
-//
-// Post the following to test this endpoint:
+// POST the following to test this endpoint:
 // {"user_id":"user1"}
 func tasks(w http.ResponseWriter, r *http.Request) {
 
@@ -277,75 +261,6 @@ func tasks(w http.ResponseWriter, r *http.Request) {
 	//return {"task_id": r["id"]}, 201
 	//else:
 	//return response.text, response.status_code
-	panic("not implemented")
-}
-
-// monitor serves information related to how your application is behaving in InfluxDB.
-//
-// InfluxDB includes functionality designed to help you programmatically manage your instances.
-// This page provides basic insights into usage, and tasks. Much more related functionality exists.
-// There is a template that you can install into your account, to learn more, follow this link:
-// https://www.influxdata.com/blog/tldr-influxdb-tech-tips-using-and-understanding-the-influxdb-cloud-usage-template/
-//
-// Your code should verify that the person viewing this has proper authorization.
-func monitor(w http.ResponseWriter, r *http.Request) {
-
-	//# The following flux query will retrieve the 3 kinds of usage data available
-	//# and combine the data into a single table for ease of formatting.
-	//# For more information about the usage.from() function, see the following:
-	//# https://docs.influxdata.com/flux/v0.x/stdlib/experimental/usage/from/
-	//
-	//query = """
-	//import "experimental/usage"
-	//usage.from(start: -1h, stop: now())
-	//|> toFloat()
-	//|> group(columns: ["_measurement"])
-	//|> sum()
-	//"""
-	//tables = query_api.query(query, org=organization_name)
-	//html = "<H1>usage</H1><TABLE><TR><TH>usage type</TH><TH>value</TH></TR>"
-	//for table in tables:
-	//for record in table:
-	//mes = record["_measurement"]
-	//val = record["_value"]
-	//html += f"<TR><TD>{mes}</TD><TD>{val}</TD></TR>"
-	//html += "</TABLE>"
-	//
-	//# This part of the function looks at task health.
-	//# Tasks allow you to run code periodically within InfluxDB.
-	//# For an overview of tasks, see
-	//# https://docs.influxdata.com/influxdb/cloud/process-data/get-started/
-	//
-	//# It is very useful to know if your tasks are running and succeeding or not, and to alert on those conditions.
-	//# This section uses the tasks_api that comes with the client library
-	//# Documentation on this library is available here:
-	//# https://influxdb-client.readthedocs.io/en/stable/api.html#tasksapi
-	//tasks_api = client.tasks_api()
-	//
-	//# list all the tasks
-	//tasks = tasks_api.find_tasks()
-	//
-	//html += "<H1>tasks</H1><TABLE><TR><TH>name</TH><TH>status</TH><TH>last run</TH><TH>last run status</TH></TR>"
-	//
-	//# Each task has a run log, accessed through the get_runs() function
-	//# This code checks if each task is enabled, and if so, checks the status of its last run
-	//# For active tasks, format the status report
-	//for task in tasks:
-	//started_at = ""
-	//run_status = ""
-	//if task.status == "active":
-	//runs = tasks_api.get_runs(task.id, limit=1)
-	//if len(runs) > 0:  # new tasks my not have any runs yet
-	//run = runs[0]
-	//started_at = run.started_at
-	//run_status = run.status
-	//html += f"<TR><TD>{task.name}</TD><TD>{task.status}</TD><TD>{started_at}</TD><TD>{run_status}</TD></TR></BR>"
-	//
-	//if len(tasks) == 0:
-	//html += "<TR><TD>no tasks</TD><TR>"
-	//html += "</TABLE>"
-	//
-	//return html, 200
 	panic("not implemented")
 }
 

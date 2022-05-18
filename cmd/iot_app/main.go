@@ -215,8 +215,8 @@ func main() {
 	go createWebserver()
 
 	// Retrieve variables from the environment or use defaults.
-	url := os.Getenv("INFLUXDB_URL")
-	orgId := os.Getenv("INFLUXDB_ORGID")
+	url := os.Getenv("INFLUXDB_HOST")
+	orgId := os.Getenv("INFLUXDB_ORGANIZATION_ID")
 	bucket := os.Getenv("INFLUX_BUCKET")
 	token := os.Getenv("INFLUXDB_TOKEN")
 

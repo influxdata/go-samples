@@ -18,12 +18,28 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+type User struct {
+	valid      bool
+	name       string // Local name from login.
+	email      string // Local email from login.
+	readToken  string
+	writeToken string
+}
+
+// Maybe not the best choice...
+var activeUser User
+
 // HTML templates
 type Template struct {
 	templates *template.Template
 }
 
 func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
+	// https://echo.labstack.com/guide/templates/#advanced---calling-echo-from-templates
+	if viewContext, isMap := data.(map[string]interface{}); isMap {
+		viewContext["reverse"] = c.Echo().Reverse
+	}
+
 	return t.templates.ExecuteTemplate(w, name, data)
 }
 
@@ -40,11 +56,29 @@ func setupWebHandlers(e *echo.Echo) {
 		password := c.FormValue("password")
 		fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
 
+		// Login successful, update the active user.
+		activeUser.valid = true
+		activeUser.name = "<unknown>" // #TODO: retrieve from db?
+		activeUser.email = email
+
 		// #TODO: validate credentials and handle accordingly.
 		return c.Redirect(http.StatusSeeOther, "profile")
 	})
 	e.GET("/profile", func(c echo.Context) error {
-		return c.Render(http.StatusOK, "profile.html", nil)
+		// Maybe a better way to do this. Flask has @login_required.
+		if !activeUser.valid {
+			fmt.Println("Not logged in, redirecting to login page.")
+			return c.Redirect(http.StatusSeeOther, "login")
+		}
+
+		return c.Render(http.StatusOK, "profile.html", map[string]interface{}{
+			"name": activeUser.name,
+		})
+	})
+
+	e.GET("/graph_query_data", func(c echo.Context) error {
+		// ???
+		return c.String(http.StatusOK, "query data..?")
 	})
 }
 
@@ -79,6 +113,8 @@ func getEnvVar(name string, fallback string) string {
 }
 
 func main() {
+	activeUser.valid = false
+
 	// Run the webserver in a goroutine.
 	go createWebserver()
 
@@ -96,6 +132,10 @@ func main() {
 
 	client := influxdb2.NewClient(url, token)
 	queryApi := client.QueryAPI(orgId)
+	// Could use the authorizations API to get auth details from the actual database.
+	//authApi := client.AuthorizationsAPI()
+
+	// Determine the user. There could be many, just select the first we find.
 
 	query := fmt.Sprintf(`from(bucket: "%s")
 							|> range(start: -100h)`, bucket)

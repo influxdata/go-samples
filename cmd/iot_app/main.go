@@ -1,7 +1,6 @@
 package main
 
 // Port of https://github.com/InfluxCommunity/iot_app
-// Using Echo instead of Flask for a webserver.
 
 import (
 	"bytes"
@@ -13,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -23,8 +21,6 @@ import (
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/mattn/go-sqlite3" // Need the sqlite3 driver.
 )
 
@@ -39,9 +35,9 @@ type User struct {
 var activeUser User
 var readClient influxdb2.Client
 var writeClient influxdb2.Client
-var url string
-var orgId string
-var bucket string
+var url string = os.Getenv("INFLUXDB_HOST")
+var orgId string = os.Getenv("INFLUXDB_ORGANIZATION_ID")
+var bucket string = os.Getenv("INFLUX_BUCKET")
 var queryJson string
 
 const loginDatabase = "logins.db"
@@ -144,7 +140,7 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 
 		// Update our read/write clients since we just retrieved the tokens.
 		readClient = influxdb2.NewClient(url, readToken)
-		readClient = influxdb2.NewClient(url, writeToken)
+		writeClient = influxdb2.NewClient(url, writeToken)
 
 		return true
 	}
@@ -233,114 +229,92 @@ func writeData(cl influxdb2.Client) {
 	}
 }
 
-// HTML templates
-type Template struct {
-	templates *template.Template
+func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
+	t, _ := template.ParseFiles(fmt.Sprintf("templates/%s.html", tmpl))
+	t.Execute(w, data)
 }
 
-func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
-	// https://echo.labstack.com/guide/templates/#advanced---calling-echo-from-templates
-	if viewContext, isMap := data.(map[string]interface{}); isMap {
-		viewContext["reverse"] = c.Echo().Reverse
-	}
-
-	return t.templates.ExecuteTemplate(w, name, data)
-}
-
-func setupWebHandlers(e *echo.Echo) {
-	e.GET("/", func(c echo.Context) error {
-		return c.Render(http.StatusOK, "index.html", nil)
+func setupWebHandlers() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		renderTemplate(w, "index", nil)
 	})
-	e.GET("/login", func(c echo.Context) error {
-		return c.Render(http.StatusOK, "login.html", nil)
-	})
-	e.POST("/login", func(c echo.Context) error {
-		// Attempt to verify credientials and redirect to profile.html if successful.
-		email := c.FormValue("email")
-		password := c.FormValue("password")
-		fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
 
-		// Query the login database to see if the credentials match.
-		if tryLoginCredentials(email, password) {
-			fmt.Println("Login success")
-			return c.Redirect(http.StatusSeeOther, "profile")
-		} else {
-			fmt.Println("Login failed")
-			return c.String(http.StatusForbidden, "Invalid login")
+	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			renderTemplate(w, "login", nil)
+		case "POST":
+			email := r.FormValue("email")
+			password := r.FormValue("password")
+			fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
+
+			// Query the login database to see if the credentials match.
+			if tryLoginCredentials(email, password) {
+				fmt.Println("Login success")
+				http.Redirect(w, r, "profile", http.StatusSeeOther)
+			} else {
+				fmt.Println("Login failed")
+				http.Error(w, "Invalid login", http.StatusForbidden)
+			}
 		}
 	})
-	e.GET("/profile", func(c echo.Context) error {
-		// Maybe a better way to do this. Flask has @login_required.
+
+	http.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
 		if !activeUser.valid {
 			fmt.Println("Not logged in, redirecting to login page.")
-			return c.Redirect(http.StatusSeeOther, "login")
+			http.Redirect(w, r, "login", http.StatusSeeOther)
 		}
 
-		return c.Render(http.StatusOK, "profile.html", map[string]interface{}{
+		w.WriteHeader(http.StatusOK)
+		renderTemplate(w, "profile", map[string]interface{}{
 			"name":      activeUser.name,
 			"queryJson": queryJson,
 		})
 	})
 
-	// Invoked when the Query Data button is pressed.
-	e.GET("/graph_query_data", func(c echo.Context) error {
+	http.HandleFunc("/graph_query_data", func(w http.ResponseWriter, r *http.Request) {
 		data := queryData(readClient)
 		queryJson = data
-		return c.JSON(http.StatusOK, queryJson)
+		encoder := json.NewEncoder(w)
+		w.WriteHeader(http.StatusOK)
+		encoder.Encode(queryJson)
 	})
-	// Invoked when the Write Data button is pressed.
-	e.GET("/graph_write_data", func(c echo.Context) error {
+
+	http.HandleFunc("/graph_write_data", func(w http.ResponseWriter, r *http.Request) {
 		writeData(writeClient)
-		return c.JSON(http.StatusOK, "") // Empty write.
+		w.WriteHeader(http.StatusOK)
 	})
 
-	e.GET("/signup", func(c echo.Context) error {
-		return c.Render(http.StatusOK, "signup.html", nil)
-	})
-	e.POST("/signup", func(c echo.Context) error {
-		email := c.FormValue("email")
-		name := c.FormValue("name")
-		password := c.FormValue("password")
-		readToken := c.FormValue("readToken")
-		writeToken := c.FormValue("writeToken")
+	http.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			renderTemplate(w, "signup", nil)
+		case "POST":
+			email := r.FormValue("email")
+			name := r.FormValue("name")
+			password := r.FormValue("password")
+			readToken := r.FormValue("readToken")
+			writeToken := r.FormValue("writeToken")
 
-		fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
-			email, name, password, readToken, writeToken)
+			fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
+				email, name, password, readToken, writeToken)
 
-		if err := registerUser(email, name, password, readToken, writeToken); err != nil {
-			fmt.Println("Failed to register user:", err)
-			return c.String(http.StatusBadRequest, "Failed to register user.")
-		} else {
-			return c.Redirect(http.StatusSeeOther, "login")
+			if err := registerUser(email, name, password, readToken, writeToken); err != nil {
+				fmt.Println("Failed to register user:", err)
+				http.Error(w, "Failed to register user.", http.StatusBadRequest)
+			} else {
+				http.Redirect(w, r, "login", http.StatusSeeOther)
+			}
 		}
 	})
-}
-
-func createWebserver() {
-	const port = 5000 // Using same port as Flask.
-
-	e := echo.New()
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
-	t := &Template{
-		templates: template.Must(template.ParseGlob("templates/*.html")),
-	}
-	e.Renderer = t
-	setupWebHandlers(e)
-	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
 func main() {
 	activeUser.valid = false
 	go createDefaultLoginDB()
-
-	// Run the webserver in a goroutine.
-	go createWebserver()
-
-	// Retrieve variables from the environment.
-	url = os.Getenv("INFLUXDB_HOST")
-	orgId = os.Getenv("INFLUXDB_ORGANIZATION_ID")
-	bucket = os.Getenv("INFLUX_BUCKET")
 
 	// Url formatting.
 	httpsPrefix := "https://"
@@ -348,6 +322,8 @@ func main() {
 		url = strings.Join([]string{httpsPrefix, url}, "")
 	}
 
-	// Sleep forever, don't want to kill the webserver as soon as we launch it.
-	select {}
+	fmt.Println("Starting server at http://localhost:8080")
+
+	setupWebHandlers()
+	http.ListenAndServe(":8080", nil)
 }

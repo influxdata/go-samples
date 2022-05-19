@@ -180,35 +180,13 @@ func queryData(cl influxdb2.Client) string {
 
 	query := fmt.Sprintf(`from(bucket: "%s")
 							|> range(start: -100h)`, bucket)
-	results, err := queryApi.Query(context.Background(), query)
+	dialect := influxdb2.DefaultDialect()
+	results, err := queryApi.QueryRaw(context.Background(), query, dialect)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	type Table struct {
-		Metadata string   `json:"metadata"`
-		Records  []string `json:"records"`
-	}
-	var response struct {
-		Tables []Table `json:"tables"`
-	}
-	var currentTable *Table
-	for results.Next() {
-		if results.TableChanged() || currentTable == nil {
-			currentTable = &Table{
-				Metadata: results.TableMetadata().String(),
-			}
-			response.Tables = append(response.Tables, *currentTable)
-		}
-		currentTable.Records = append(currentTable.Records, results.Record().String())
-	}
-
-	responseBytes, err := json.Marshal(&response)
-	if err != nil {
-		return "Error"
-	}
-
-	return string(responseBytes)
+	return results
 }
 
 // Writes a random data point.

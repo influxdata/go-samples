@@ -1,6 +1,5 @@
 package main
 
-<<<<<<< HEAD
 // Port of https://github.com/InfluxCommunity/iot_app
 
 import (
@@ -305,9 +304,4 @@ func main() {
 
 	setupWebHandlers()
 	http.ListenAndServe(":8080", nil)
-=======
-// TODO: Port Python iot_app.
-func main() {
-	panic("not implemented")
->>>>>>> master
 }

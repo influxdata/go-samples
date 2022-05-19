@@ -37,7 +37,9 @@ type User struct {
 }
 
 var activeUser User
-var client influxdb2.Client
+var readClient influxdb2.Client
+var writeClient influxdb2.Client
+var url string
 var orgId string
 var bucket string
 var queryJson string
@@ -140,11 +142,40 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 
 		activeUser = newUser
 
+		// Update our read/write clients since we just retrieved the tokens.
+		readClient = influxdb2.NewClient(url, readToken)
+		readClient = influxdb2.NewClient(url, writeToken)
+
 		return true
 	}
 
 	// No matches.
 	return false
+}
+
+func registerUser(email string, name string, password string, readToken string, writeToken string) error {
+	db, err := sql.Open("sqlite3", loginDatabase)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	hasher := sha256.New()
+	hasher.Write([]byte(password))
+	hash := hasher.Sum(nil)
+	passwordHash := hex.EncodeToString(hash)
+
+	insert := fmt.Sprintf(`INSERT INTO user VALUES(
+		%d,
+		'%s',
+		'sha256$%s',
+		'%s',
+		'%s',
+		'%s')`,
+		rand.Int(), email, passwordHash, name, readToken, writeToken)
+	_, err = db.Exec(insert)
+
+	return err
 }
 
 // Returns a json representation of the query.
@@ -253,14 +284,35 @@ func setupWebHandlers(e *echo.Echo) {
 
 	// Invoked when the Query Data button is pressed.
 	e.GET("/graph_query_data", func(c echo.Context) error {
-		data := queryData(client)
+		data := queryData(readClient)
 		queryJson = data
 		return c.JSON(http.StatusOK, queryJson)
 	})
 	// Invoked when the Write Data button is pressed.
 	e.GET("/graph_write_data", func(c echo.Context) error {
-		writeData(client)
+		writeData(writeClient)
 		return c.JSON(http.StatusOK, "") // Empty write.
+	})
+
+	e.GET("/signup", func(c echo.Context) error {
+		return c.Render(http.StatusOK, "signup.html", nil)
+	})
+	e.POST("/signup", func(c echo.Context) error {
+		email := c.FormValue("email")
+		name := c.FormValue("name")
+		password := c.FormValue("password")
+		readToken := c.FormValue("readToken")
+		writeToken := c.FormValue("writeToken")
+
+		fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
+			email, name, password, readToken, writeToken)
+
+		if err := registerUser(email, name, password, readToken, writeToken); err != nil {
+			fmt.Println("Failed to register user:", err)
+			return c.String(http.StatusBadRequest, "Failed to register user.")
+		} else {
+			return c.Redirect(http.StatusSeeOther, "login")
+		}
 	})
 }
 
@@ -286,18 +338,15 @@ func main() {
 	go createWebserver()
 
 	// Retrieve variables from the environment.
-	url := os.Getenv("INFLUXDB_HOST")
+	url = os.Getenv("INFLUXDB_HOST")
 	orgId = os.Getenv("INFLUXDB_ORGANIZATION_ID")
 	bucket = os.Getenv("INFLUX_BUCKET")
-	token := os.Getenv("INFLUXDB_TOKEN")
 
 	// Url formatting.
 	httpsPrefix := "https://"
 	if !strings.Contains(url, httpsPrefix) {
 		url = strings.Join([]string{httpsPrefix, url}, "")
 	}
-
-	client = influxdb2.NewClient(url, token)
 
 	// Sleep forever, don't want to kill the webserver as soon as we launch it.
 	select {}

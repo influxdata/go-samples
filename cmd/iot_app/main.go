@@ -97,16 +97,10 @@ Note that this account will not be able to access your influxdb organization.`
 	return sql.Open("sqlite3", loginDatabase)
 }
 
-func tryLoginCredentials(user string, plainPassword string) bool {
-	db, err := sql.Open("sqlite3", loginDatabase)
+func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
+	result, err := db.Query(`SELECT * FROM user WHERE email=$1`, user)
 	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	result, err := db.Query(`SELECT * FROM user WHERE email='$1'`, user)
-	if err != nil {
-		return false
+		return fmt.Errorf("failed to send query: %q\n", err)
 	}
 	defer result.Close()
 
@@ -117,7 +111,7 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 		)
 		err = result.Scan(&id, &email, &password, &name, &readToken, &writeToken)
 		if err != nil {
-			return false
+			return fmt.Errorf("result scan failed: %q\n", err)
 		}
 
 		hasher := sha256.New()
@@ -127,13 +121,11 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 		password = strings.TrimPrefix(password, "sha256$")
 		decoded, err := hex.DecodeString(password)
 		if err != nil {
-			fmt.Println("Failed to decode password hash:", err)
-			return false
+			return fmt.Errorf("failed to decode password hash: %q\n", err)
 		}
 
 		if bytes.Compare(hash, decoded) != 0 {
-			fmt.Println("Incorrect password.")
-			return false
+			return errors.New("incorrect password.")
 		}
 
 		var newUser User
@@ -149,20 +141,13 @@ func tryLoginCredentials(user string, plainPassword string) bool {
 		readClient = influxdb2.NewClient(url, readToken)
 		writeClient = influxdb2.NewClient(url, writeToken)
 
-		return true
+		return nil
 	}
 
-	// No matches.
-	return false
+	return errors.New("failed to find any matching user account emails.")
 }
 
-func registerUser(email string, name string, password string, readToken string, writeToken string) error {
-	db, err := sql.Open("sqlite3", loginDatabase)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
+func registerUser(db *sql.DB, email string, name string, password string, readToken string, writeToken string) error {
 	hasher := sha256.New()
 	hasher.Write([]byte(password))
 	hash := hasher.Sum(nil)
@@ -176,13 +161,13 @@ func registerUser(email string, name string, password string, readToken string, 
 		'%s',
 		'%s')`,
 		rand.Int(), email, passwordHash, name, readToken, writeToken)
-	_, err = db.Exec(insert)
+	_, err := db.Exec(insert)
 
 	return err
 }
 
 // Returns a json representation of the query.
-func queryData(cl influxdb2.Client) string {
+func queryData(cl influxdb2.Client) (string, error) {
 	queryApi := cl.QueryAPI(orgId)
 
 	query := fmt.Sprintf(`from(bucket: "%s")
@@ -190,14 +175,14 @@ func queryData(cl influxdb2.Client) string {
 	dialect := influxdb2.DefaultDialect()
 	results, err := queryApi.QueryRaw(context.Background(), query, dialect)
 	if err != nil {
-		log.Fatal(err)
+		return "", fmt.Errorf("failed to run db query: %q\n", err)
 	}
 
-	return results
+	return results, nil
 }
 
 // Writes a random data point.
-func writeData(cl influxdb2.Client) {
+func writeData(cl influxdb2.Client) error {
 	writeApi := cl.WriteAPIBlocking(orgId, bucket)
 
 	tags := map[string]string{
@@ -210,8 +195,10 @@ func writeData(cl influxdb2.Client) {
 
 	point := write.NewPoint("measurement1", tags, fields, time.Now())
 	if err := writeApi.WritePoint(context.Background(), point); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("failed to run db write: %q\n", err)
 	}
+
+	return nil
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
@@ -223,22 +210,24 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, "index", nil)
 }
 
-func loginHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		renderTemplate(w, "login", nil)
-	case "POST":
-		email := r.FormValue("email")
-		password := r.FormValue("password")
-		fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
+func loginHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			renderTemplate(w, "login", nil)
+		case "POST":
+			email := r.FormValue("email")
+			password := r.FormValue("password")
+			fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
 
-		// Query the login database to see if the credentials match.
-		if tryLoginCredentials(email, password) {
-			fmt.Println("Login success")
-			http.Redirect(w, r, "profile", http.StatusSeeOther)
-		} else {
-			fmt.Println("Login failed")
-			http.Error(w, "Invalid login", http.StatusForbidden)
+			// Query the login database to see if the credentials match.
+			if err := tryLoginCredentials(db, email, password); err == nil {
+				fmt.Println("Login success")
+				http.Redirect(w, r, "profile", http.StatusSeeOther)
+			} else {
+				fmt.Printf("Login failed: %q\n", err)
+				http.Error(w, "Invalid login", http.StatusForbidden)
+			}
 		}
 	}
 }
@@ -256,48 +245,59 @@ func profileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func queryDataHandler(w http.ResponseWriter, r *http.Request) {
-	data := queryData(readClient)
+	data, err := queryData(readClient)
+	if err != nil {
+		fmt.Printf("Query failed: %q\n", err)
+		return
+	}
+
 	queryJson = data
 	encoder := json.NewEncoder(w)
 	encoder.Encode(queryJson)
 }
 
 func writeDataHandler(w http.ResponseWriter, r *http.Request) {
-	writeData(writeClient)
-}
-
-func signupHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		renderTemplate(w, "signup", nil)
-	case "POST":
-		email := r.FormValue("email")
-		name := r.FormValue("name")
-		password := r.FormValue("password")
-		readToken := r.FormValue("readToken")
-		writeToken := r.FormValue("writeToken")
-
-		fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
-			email, name, password, readToken, writeToken)
-
-		if err := registerUser(email, name, password, readToken, writeToken); err != nil {
-			fmt.Println("Failed to register user:", err)
-			http.Error(w, "Failed to register user.", http.StatusBadRequest)
-		} else {
-			http.Redirect(w, r, "login", http.StatusSeeOther)
-		}
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	err := writeData(writeClient)
+	if err != nil {
+		fmt.Printf("Write failed: %q\n", err)
+		return
 	}
 }
 
-func setupWebHandlers() {
+func signupHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			renderTemplate(w, "signup", nil)
+		case "POST":
+			email := r.FormValue("email")
+			name := r.FormValue("name")
+			password := r.FormValue("password")
+			readToken := r.FormValue("readToken")
+			writeToken := r.FormValue("writeToken")
+
+			fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
+				email, name, password, readToken, writeToken)
+
+			if err := registerUser(db, email, name, password, readToken, writeToken); err != nil {
+				fmt.Println("Failed to register user:", err)
+				http.Error(w, "Failed to register user.", http.StatusBadRequest)
+			} else {
+				http.Redirect(w, r, "login", http.StatusSeeOther)
+			}
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func setupWebHandlers(db *sql.DB) {
 	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/login", loginHandler)
+	http.HandleFunc("/login", loginHandler(db))
 	http.HandleFunc("/profile", profileHandler)
 	http.HandleFunc("/graph_query_data", queryDataHandler)
 	http.HandleFunc("/graph_write_data", writeDataHandler)
-	http.HandleFunc("/signup", signupHandler)
+	http.HandleFunc("/signup", signupHandler(db))
 }
 
 func main() {
@@ -316,6 +316,6 @@ func main() {
 
 	fmt.Println("Starting server at http://localhost:8080")
 
-	setupWebHandlers()
+	setupWebHandlers(db)
 	http.ListenAndServe(":8080", nil)
 }

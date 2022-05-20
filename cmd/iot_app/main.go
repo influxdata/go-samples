@@ -228,6 +228,8 @@ func loginHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 				fmt.Printf("Login failed: %q\n", err)
 				http.Error(w, "Invalid login", http.StatusForbidden)
 			}
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	}
 }

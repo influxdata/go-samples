@@ -152,16 +152,17 @@ func registerUser(db *sql.DB, email string, name string, password string, readTo
 	hasher.Write([]byte(password))
 	hash := hasher.Sum(nil)
 	passwordHash := hex.EncodeToString(hash)
+	passwordHash = strings.Join([]string{"sha256$", passwordHash}, "")
 
 	insert := fmt.Sprintf(`INSERT INTO user VALUES(
-		%d,
-		'%s',
-		'sha256$%s',
-		'%s',
-		'%s',
-		'%s')`,
-		rand.Int(), email, passwordHash, name, readToken, writeToken)
-	_, err := db.Exec(insert)
+		$1,
+		$2,
+		$3,
+		$4,
+		$5,
+		$6)`,
+	)
+	_, err := db.Exec(insert, rand.Int(), email, passwordHash, name, readToken, writeToken)
 
 	return err
 }

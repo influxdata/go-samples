@@ -7,8 +7,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -28,6 +30,9 @@ var (
 	// Organizations are used by InfluxDB to group resources such as users,
 	// tasks, buckets, dashboards and more.
 	organizationName = os.Getenv("INFLUXDB_ORGANIZATION")
+	// organizationID is used by the task API and is populated
+	// by looking up the organizationName at startup.
+	organizationID string
 	// host is the URL of your InfluxDB instance or Cloud environment.
 	// This is also the URL where you reach the UI for your account.
 	host = os.Getenv("INFLUXDB_HOST")
@@ -58,6 +63,13 @@ func init() {
 
 // main starts your Go application and begins listening on port 8080.
 func main() {
+	// Lookup the organizationID using the organizationName.
+	org, err := client.OrganizationsAPI().FindOrganizationByName(context.Background(), organizationName)
+	if err != nil {
+		log.Fatal(fmt.Errorf("Failed to lookup organization named %q: %v", organizationName, err))
+	}
+	organizationID = *org.Id
+
 	// Register some routes for your application. Check out the documentation of
 	// each function registered below for more details on how it works.
 	http.HandleFunc("/", welcome)
@@ -97,8 +109,8 @@ func welcome(w http.ResponseWriter, r *http.Request) {
 // https://influxdb-client.readthedocs.io/en/stable/usage.html#write
 func ingest(w http.ResponseWriter, r *http.Request) {
 
-	// Parse the JSON request body.
-	// Production code should authorize the user, and ensure that the user_id matches the authorization.
+	// Parse the JSON request body. Production code should authenticate the caller
+	// and authorize access to the user identified by the provided user ID.
 	var request struct {
 		UserID      string  `json:"user_id"`
 		Measurement string  `json:"measurement"`
@@ -109,28 +121,21 @@ func ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Transform an InfluxDB point from the JSON request.
+	// Construct an InfluxDB point from the JSON request suitable for writing.
 	point := influxdb2.NewPoint(request.Measurement, map[string]string{
 		"user_id": request.UserID,
 	}, map[string]interface{}{
 		"field1": request.Field,
 	}, time.Now())
 
-	// Write the point to InfluxDB.
+	// Write the point to InfluxDB using the non-blocking write API.
 	if err := writeAPI.WritePoint(r.Context(), point); err != nil {
-		// You can build on this code to interpret errors from the InfluxDB API and
-		// handle them differently, e.g. returning an application error in the event
-		// your bucket is not found and the InfluxDB API returns a 404 status.
-		if influxErr, ok := err.(*influxdb2http.Error); ok {
-			w.WriteHeader(influxErr.StatusCode)
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-		}
+		handleError(w, err)
 		return
 	}
 
-	// You can view the data written by this function by navigating to the InfluxDB UI
-	// for your account and using the Data Explorer.
+	// You can view the data written by this function by navigating to
+	// the InfluxDB UI for your account and using the Data Explorer.
 }
 
 // query serves down sampled data for a user in JSON format.
@@ -141,8 +146,8 @@ func ingest(w http.ResponseWriter, r *http.Request) {
 // {"user_id":"user1"}
 func query(w http.ResponseWriter, r *http.Request) {
 
-	// Parse the JSON request body.
-	// Production code should authorize the user, and ensure that the user_id matches the authorization.
+	// Parse the JSON request body. Production code should authenticate the caller
+	// and authorize access to the user identified by the provided user ID.
 	var request struct {
 		UserID string `json:"user_id"`
 	}
@@ -162,41 +167,41 @@ func query(w http.ResponseWriter, r *http.Request) {
 		"bucket_name": bucketName,
 		"user_id":     request.UserID,
 	}
-	query := `from(bucket: bucket_name) |> range(start: -1h) |> filter(fn: (r) => r.user_id == user_id)`
+	query := `from(bucket: params.bucket_name) 
+				|> range(start: -1h) 
+				|> filter(fn: (r) => r._measurement == "downsampled")
+				|> filter(fn: (r) => r.user_id == params.user_id)
+				|> group(columns: ["_field"])
+				|> last()`
 
 	// The query API offers the ability to retrieve raw data via QueryRaw and QueryRawWithParams, or
 	// a parsed representation via Query and QueryWithParams. We use the latter here.
 	tables, err := queryAPI.QueryWithParams(r.Context(), query, params)
 	if err != nil {
-		// You can build on this code to interpret errors from the InfluxDB API and
-		// handle them differently, e.g. returning an application error in the event
-		// your bucket is not found and the InfluxDB API returns a 404 status.
-		if influxErr, ok := err.(*influxdb2http.Error); ok {
-			w.WriteHeader(influxErr.StatusCode)
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-		}
+		handleError(w, err)
 		return
 	}
 
-	// Use the parsed representation of the query results to iterate over the tables and records
-	// and structure them appropriately for marshalling into JSON.
+	// Use the parsed representation of the query results to iterate
+	// over the tables and gather all records into an array.
 	type Table struct {
-		Metadata string   `json:"metadata"`
-		Records  []string `json:"records"`
+		Records []string `json:"records"`
 	}
 	var response struct {
 		Tables []Table `json:"tables"`
 	}
 	var currentTable *Table
 	for tables.Next() {
-		if tables.TableChanged() || currentTable == nil {
-			response.Tables = append(response.Tables, *currentTable)
-			currentTable = &Table{
-				Metadata: tables.TableMetadata().String(),
+		if tables.TableChanged() {
+			if currentTable != nil {
+				response.Tables = append(response.Tables, *currentTable)
 			}
+			currentTable = &Table{}
 		}
 		currentTable.Records = append(currentTable.Records, tables.Record().String())
+	}
+	if currentTable != nil {
+		response.Tables = append(response.Tables, *currentTable)
 	}
 
 	// Marshal the response into JSON and return it to the client.
@@ -218,8 +223,8 @@ func query(w http.ResponseWriter, r *http.Request) {
 // {"user_id":"user1"}
 func setup(w http.ResponseWriter, r *http.Request) {
 
-	// Parse the JSON request body.
-	// Production code should authorize the user, and ensure that the user_id matches the authorization.
+	// Parse the JSON request body. Production code should authenticate the caller
+	// and authorize access to the user identified by the provided user ID.
 	var request struct {
 		UserID string `json:"user_id"`
 	}
@@ -228,66 +233,50 @@ func setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskQuery := fmt.Sprintf(`option task = {name "%s_task", every: 5m}
-	
-	from(bucket: %q)
-		|> range(start: -task.every)
-		|> filter(fn: (r) => r.user_id == %q
-	`, request.UserID, bucketName, request.UserID
+	// Format a query that will down sample each field of each measurement included
+	// in the data by calculating the mean, min and max and writing the results to
+	// a new measurement in the same bucket.
+	taskQuery := fmt.Sprintf(`
+	data = from(bucket: %q)
+		|> range(start: -5m)
+		|> filter(fn: (r) => r.user_id == %q)
+        |> filter(fn: (r) => r._measurement != "downsampled")
+		|> drop(columns: ["_start", "_time", "_stop"])
 
-	//# ensure there is a bucket to copy the data into
-	//find_or_create_bucket("processed_data_bucket")
-	//
-	//# The follow flux will find any values in the specified time range that have a
-	//# value of 0.0 and will copy those points into a special bucket.
-	//# This demonstrates 2 concepts:
-	//# 1. "downsampling", or the ability to easily precompute data so that you can supply low latency
-	//#    queries for your UI.
-	//#    For more on downsampling, see:
-	//#    https://awesome.influxdata.com/docs/part-2/querying-and-data-transformations/#materialized-views-or-downsampling-tasks
-	//# 2. "alerting", or the ability to send a notification based on certain values and conditions.
-	//#    For example, rather than writing the data to a new bucket, you can use http.post() to call back your application
-	//#    or a different service.
-	//#    To see the full power of the alerting system, see:
-	//#    https://awesome.influxdata.com/docs/part-3/checks-and-notifications/
-	//query = """
-	//option task = {{name: "{}_task", every: 1m}}
-	//from(bucket: "{}")
-	//|> range(start: -1m)
-	//|> filter(fn: (r) => r.user_id == "{}")
-	//|> filter(fn: (r) => r._value == 0.0)
-	//|> to(bucket: "processed_data_bucket")
-	//"""
-	//
-	//if request.method == "POST":
-	//# Production code should authorize the user, and ensure that the user_id matches the authorization.
-	//user_id = request.json["user_id"]
-	//# If you prefer to try this without posting the data,
-	//# uncomment the following line and comment out the above line
-	//# user_id = "user1"
-	//
-	//# Update the query specific to the user id
-	//q = query.format(user_id, bucket_name, user_id)
-	//
-	//# Prepare the REST API call.
-	//# In some cases, the REST API is simpler to use than the client API
-	//# Refer to the REST API docs to see how to manage tasks:
-	//# https://docs.influxdata.com/influxdb/cloud/api/#operation/PostTasks
-	//data = {"flux": q, "org": organization_name}
-	//url = urljoin(host, "/api/v2/tasks")
-	//
-	//headers = {
-	//"Authorization": f"Token {token}",
-	//"Content-Type": "application/json",
-	//}
-	//response = requests.post(url, headers=headers, data=json.dumps(data))
-	//if response.status_code == 201:
-	//r = json.loads(response.text)
-	//
-	//# This will return the task id, which your application should store so that it can refer to it later
-	//# for managing tasks
-	//return {"task_id": r["id"]}, 201
-	//else:
-	//return response.text, response.status_code
-	panic("not implemented")
+	max_data = data
+		|> max()
+		|> map(fn: (r) => ({ r with _field: r._field + "_max"}))
+
+	min_data = data
+		|> min()
+		|> map(fn: (r) => ({ r with _field: r._field + "_min"}))
+
+	mean_data = data
+		|> mean()
+		|> map(fn: (r) => ({ r with _field: r._field + "_mean"}))
+
+	union(tables: [max_data, min_data, mean_data])
+	 	|> map(fn: (r) => ({ r with _time: now(), _measurement: "downsampled" }))
+		|> to(bucket: %q)`,
+		bucketName, request.UserID, bucketName)
+
+	name := fmt.Sprintf("%s_task", request.UserID)
+	_, err := client.TasksAPI().CreateTaskWithEvery(r.Context(), name, taskQuery, "5m", organizationID)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+}
+
+// handleError checks whether the provided error includes a status code and writes
+// it to the ResponseWriter if so, otherwise defaulting to an internal server error.
+func handleError(w http.ResponseWriter, err error) {
+	// You can build on this code to interpret errors from the InfluxDB API and
+	// handle them differently, e.g. returning an application error in the event
+	// your bucket is not found and the InfluxDB API returns a 404 status.
+	if influxErr, ok := err.(*influxdb2http.Error); ok {
+		w.WriteHeader(influxErr.StatusCode)
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }

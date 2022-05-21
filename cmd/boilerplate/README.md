@@ -12,6 +12,14 @@ The following environment variables are required to be set:
 This application provides the ability to write data for its users, setup tasks to 
 downsample their data, and query that downsampled data.
 
+```mermaid
+flowchart LR
+  task[[task]]
+  /setup-. create task .->task
+  /ingest-- raw data -->task
+  task-- downsampled data -->/query
+```
+
 From this directory with the environment variables above set in scope, run the application
 with `go run main.go` to start the application listening on port 8080.
 

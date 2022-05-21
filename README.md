@@ -14,5 +14,4 @@ A collection of Go code samples for interacting with InfluxDB using the [Go clie
 ### Using a different language?
 
 Checkout these other sample repositories:
-    - [Javascript](placeholder)
-    - [Python](placeholder)
+- [Python Flask App](https://github.com/InfluxCommunity/sample-flask)

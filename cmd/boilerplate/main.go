@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -63,6 +64,7 @@ func init() {
 
 // main starts your Go application and begins listening on port 8080.
 func main() {
+
 	// Lookup the organizationID using the organizationName.
 	org, err := client.OrganizationsAPI().FindOrganizationByName(context.Background(), organizationName)
 	if err != nil {
@@ -138,7 +140,9 @@ func ingest(w http.ResponseWriter, r *http.Request) {
 	// the InfluxDB UI for your account and using the Data Explorer.
 }
 
-// query serves down sampled data for a user in JSON format.
+// query serves down sampled data for a user in JSON format. It returns the last
+// value for each field of the data, returning the latest min, max and mean value
+// within the last 24 hours.
 //
 // Note that "user" here refers to a user in your application, not an InfluxDB user.
 //
@@ -168,10 +172,9 @@ func query(w http.ResponseWriter, r *http.Request) {
 		"user_id":     request.UserID,
 	}
 	query := `from(bucket: params.bucket_name) 
-				|> range(start: -1h) 
+				|> range(start: -24h) 
 				|> filter(fn: (r) => r._measurement == "downsampled")
 				|> filter(fn: (r) => r.user_id == params.user_id)
-				|> group(columns: ["_field"])
 				|> last()`
 
 	// The query API offers the ability to retrieve raw data via QueryRaw and QueryRawWithParams, or
@@ -182,10 +185,12 @@ func query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the parsed representation of the query results to iterate
-	// over the tables and gather all records into an array.
+	// Use the parsed representation of the query results to iterate over the
+	// returned tables and format all records into JSON. For more examples of iterating
+	// over parsed query results, see the influxdb-client-go documentation:
+	// https://github.com/influxdata/influxdb-client-go#basic-example
 	type Table struct {
-		Records []string `json:"records"`
+		Records []map[string]string `json:"records"`
 	}
 	var response struct {
 		Tables []Table `json:"tables"`
@@ -198,7 +203,13 @@ func query(w http.ResponseWriter, r *http.Request) {
 			}
 			currentTable = &Table{}
 		}
-		currentTable.Records = append(currentTable.Records, tables.Record().String())
+		pairs := strings.Split(tables.Record().String(), ",")
+		record := make(map[string]string)
+		for _, pair := range pairs {
+			kv := strings.Split(pair, ":")
+			record[kv[0]] = kv[1]
+		}
+		currentTable.Records = append(currentTable.Records, record)
 	}
 	if currentTable != nil {
 		response.Tables = append(response.Tables, *currentTable)

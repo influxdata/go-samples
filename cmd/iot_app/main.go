@@ -1,4 +1,4 @@
-// This package implements a basic IoT app that features a local login system
+// Package main implements a basic IoT app that features a local login system
 // for managing tokens, as well as simple querying and datapoint inserting.
 // Note that the login system is extraordinally simple, allowing for just a single
 // login at a time. This is for demonstration purposes.
@@ -50,7 +50,7 @@ var (
 
 const loginDatabase = "logins.db"
 
-// Connects to the local login database. Creates one with a default account if there isn't one.
+// getLoginDB connects to the local login database. Creates one with a default account if there isn't one.
 func getLoginDB() (*sql.DB, error) {
 	// If we don't have a login database yet, create one with a default user account.
 	if _, err := os.Stat(loginDatabase); errors.Is(err, os.ErrNotExist) {

@@ -19,10 +19,12 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
 	_ "github.com/mattn/go-sqlite3" // Need the sqlite3 driver.
 )
@@ -41,9 +43,9 @@ var (
 	writeClient influxdb2.Client
 	queryJson   string
 
-	url    = os.Getenv("INFLUXDB_HOST")
-	orgId  = os.Getenv("INFLUXDB_ORGANIZATION_ID")
-	bucket = os.Getenv("INFLUX_BUCKET")
+	url    = "https://twodotoh-dev-andrew20220517115401.remocal.influxdev.co/" //os.Getenv("INFLUXDB_HOST")
+	orgId  = "9c5955fc99a60b8f"                                                //os.Getenv("INFLUXDB_ORGANIZATION_ID")
+	bucket = "devbucket"                                                       //os.Getenv("INFLUX_BUCKET")
 )
 
 const loginDatabase = "logins.db"
@@ -168,15 +170,17 @@ func registerUser(db *sql.DB, email string, name string, password string, readTo
 }
 
 // Returns a json representation of the query.
-func queryData(cl influxdb2.Client) (string, error) {
+func queryData(cl influxdb2.Client) (*api.QueryTableResult, error) {
 	queryApi := cl.QueryAPI(orgId)
 
-	query := fmt.Sprintf(`from(bucket: "%s")
-							|> range(start: -100h)`, bucket)
-	dialect := influxdb2.DefaultDialect()
-	results, err := queryApi.QueryRaw(context.Background(), query, dialect)
+	params := map[string]string{
+		"bucket_name": bucket,
+	}
+	query := `from(bucket: params.bucket_name)
+				|> range(start: -100h)`
+	results, err := queryApi.QueryWithParams(context.Background(), query, params)
 	if err != nil {
-		return "", fmt.Errorf("failed to run db query: %q\n", err)
+		return nil, fmt.Errorf("failed to run db query: %q\n", err)
 	}
 
 	return results, nil
@@ -254,7 +258,46 @@ func queryDataHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queryJson = data
+	// Encoding expected by Plotly.js.
+	type GraphData struct {
+		X []int     `json:"x"`
+		Y []float64 `json:"y"`
+	}
+
+	graphData := make([]GraphData, 1)
+
+	// Basic single-table graphing of x,y points.
+
+	firstTable := true
+	counter := 0
+	for data.Next() {
+		if data.TableChanged() && !firstTable {
+			break // We only care about the first table here. Could draw a graph per table too.
+		}
+		firstTable = false
+		pairs := strings.Split(data.Record().String(), ",")
+		record := make(map[string]string)
+		for _, pair := range pairs {
+			kv := strings.Split(pair, ":")
+			record[kv[0]] = kv[1]
+		}
+
+		// We're only interested in the _value entries here.
+		value, _ := strconv.ParseFloat(record["_value"], 32)
+		graphData[0].X = append(graphData[0].X, counter)
+		graphData[0].Y = append(graphData[0].Y, value)
+
+		counter += 1
+	}
+
+	jsonBytes, err := json.Marshal(graphData)
+	if err != nil {
+		fmt.Printf("Query failed when marshalling data: %q\n", err)
+		return
+	}
+	queryJson = string(jsonBytes)
+
+	// Write out the json to the http body, this will update the HTML.
 	encoder := json.NewEncoder(w)
 	encoder.Encode(queryJson)
 }

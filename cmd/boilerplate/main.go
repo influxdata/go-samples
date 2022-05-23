@@ -74,10 +74,10 @@ func main() {
 
 	// Register some routes for your application. Check out the documentation of
 	// each function registered below for more details on how it works.
-	http.HandleFunc("/", welcome)
-	http.HandleFunc("/ingest", ingest) // Ingest application user data.
-	http.HandleFunc("/query", query)   // Query application user data.
-	http.HandleFunc("/setup", setup)   // Set up a new user of your application.
+	http.HandleFunc("/", GET(welcome))
+	http.HandleFunc("/ingest", POST(ingest)) // Ingest application user data.
+	http.HandleFunc("/query", POST(query))   // Query application user data.
+	http.HandleFunc("/setup", POST(setup))   // Set up a new user of your application.
 
 	// Serve the routes configured above on port 8080.
 	// Note that while this app uses Go's HTTP defaults for brevity, a real-world
@@ -276,6 +276,31 @@ func setup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		handleError(w, err)
 		return
+	}
+}
+
+var (
+	// POST is the only request method allowed by this middleware.
+	POST = method(http.MethodPost)
+	// GET is the only request method allowed by this middleware.
+	GET = method(http.MethodGet)
+)
+
+// middleware wraps one http.HandlerFunc with another in order to
+// modify its request and response.
+type middleware func(http.HandlerFunc) http.HandlerFunc
+
+// method is a middleware that verifies the request is of a certain
+// HTTP method and returns a 405 http.StatusNotAllowed otherwise.
+func method(allowed string) middleware {
+	return func(handler http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != allowed {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			handler(w, r)
+		}
 	}
 }
 

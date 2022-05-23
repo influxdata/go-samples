@@ -291,7 +291,7 @@ var (
 type middleware func(http.HandlerFunc) http.HandlerFunc
 
 // method is a middleware that verifies the request is of a certain
-// HTTP method and returns a 405 http.StatusNotAllowed otherwise.
+// HTTP method and returns a 405 http.StatusMethodNotAllowed otherwise.
 func method(allowed string) middleware {
 	return func(handler http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

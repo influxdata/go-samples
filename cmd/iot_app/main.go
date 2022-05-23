@@ -168,7 +168,7 @@ func registerUser(db *sql.DB, email string, name string, password string, readTo
 	return err
 }
 
-// Returns a json representation of the query.
+// queryData runs a simple query that fetches all data in the past 100 hours, returns a query table result.
 func queryData(cl influxdb2.Client) (*api.QueryTableResult, error) {
 	queryApi := cl.QueryAPI(orgId)
 
@@ -185,7 +185,7 @@ func queryData(cl influxdb2.Client) (*api.QueryTableResult, error) {
 	return results, nil
 }
 
-// Writes a random data point.
+// writeData writes a random data point.
 func writeData(cl influxdb2.Client) error {
 	writeApi := cl.WriteAPIBlocking(orgId, bucket)
 

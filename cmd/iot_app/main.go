@@ -43,9 +43,9 @@ var (
 	writeClient influxdb2.Client
 	queryJson   string
 
-	url    = "https://twodotoh-dev-andrew20220517115401.remocal.influxdev.co/" //os.Getenv("INFLUXDB_HOST")
-	orgId  = "9c5955fc99a60b8f"                                                //os.Getenv("INFLUXDB_ORGANIZATION_ID")
-	bucket = "devbucket"                                                       //os.Getenv("INFLUX_BUCKET")
+	url    = os.Getenv("INFLUXDB_HOST")
+	orgId  = os.Getenv("INFLUXDB_ORGANIZATION_ID")
+	bucket = os.Getenv("INFLUX_BUCKET")
 )
 
 const loginDatabase = "logins.db"
@@ -71,7 +71,7 @@ func getLoginDB() (*sql.DB, error) {
 			UNIQUE (email))`
 		_, err = db.Exec(create)
 		if err != nil {
-			return db, fmt.Errorf("login table create failed: %q\n", err)
+			return db, fmt.Errorf("login table create failed: %q", err)
 		}
 
 		const defaultLoginMessage = `
@@ -91,7 +91,7 @@ Note that this account will not be able to access your influxdb organization.`
 			'my_write_token')`
 		_, err = db.Exec(insert)
 		if err != nil {
-			return db, fmt.Errorf("login user insert failed: %q\n", err)
+			return db, fmt.Errorf("login user insert failed: %q", err)
 		}
 	}
 
@@ -102,7 +102,7 @@ Note that this account will not be able to access your influxdb organization.`
 func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
 	result, err := db.Query(`SELECT * FROM user WHERE email=$1`, user)
 	if err != nil {
-		return fmt.Errorf("failed to send query: %q\n", err)
+		return fmt.Errorf("failed to send query: %q", err)
 	}
 	defer result.Close()
 
@@ -113,7 +113,7 @@ func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
 		)
 		err = result.Scan(&id, &email, &password, &name, &readToken, &writeToken)
 		if err != nil {
-			return fmt.Errorf("result scan failed: %q\n", err)
+			return fmt.Errorf("result scan failed: %q", err)
 		}
 
 		hasher := sha256.New()
@@ -123,11 +123,11 @@ func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
 		password = strings.TrimPrefix(password, "sha256$")
 		decoded, err := hex.DecodeString(password)
 		if err != nil {
-			return fmt.Errorf("failed to decode password hash: %q\n", err)
+			return fmt.Errorf("failed to decode password hash: %q", err)
 		}
 
-		if bytes.Compare(hash, decoded) != 0 {
-			return errors.New("incorrect password.")
+		if !bytes.Equal(hash, decoded) {
+			return errors.New("incorrect password")
 		}
 
 		var newUser User
@@ -146,7 +146,7 @@ func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
 		return nil
 	}
 
-	return errors.New("failed to find any matching user account emails.")
+	return errors.New("failed to find any matching user account emails")
 }
 
 func registerUser(db *sql.DB, email string, name string, password string, readToken string, writeToken string) error {
@@ -156,14 +156,13 @@ func registerUser(db *sql.DB, email string, name string, password string, readTo
 	passwordHash := hex.EncodeToString(hash)
 	passwordHash = strings.Join([]string{"sha256$", passwordHash}, "")
 
-	insert := fmt.Sprintf(`INSERT INTO user VALUES(
+	insert := `INSERT INTO user VALUES(
 		$1,
 		$2,
 		$3,
 		$4,
 		$5,
-		$6)`,
-	)
+		$6)`
 	_, err := db.Exec(insert, rand.Int(), email, passwordHash, name, readToken, writeToken)
 
 	return err
@@ -180,7 +179,7 @@ func queryData(cl influxdb2.Client) (*api.QueryTableResult, error) {
 				|> range(start: -100h)`
 	results, err := queryApi.QueryWithParams(context.Background(), query, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run db query: %q\n", err)
+		return nil, fmt.Errorf("failed to run db query: %q", err)
 	}
 
 	return results, nil
@@ -200,7 +199,7 @@ func writeData(cl influxdb2.Client) error {
 
 	point := write.NewPoint("measurement1", tags, fields, time.Now())
 	if err := writeApi.WritePoint(context.Background(), point); err != nil {
-		return fmt.Errorf("failed to run db write: %q\n", err)
+		return fmt.Errorf("failed to run db write: %q", err)
 	}
 
 	return nil

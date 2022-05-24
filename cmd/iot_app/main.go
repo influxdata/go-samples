@@ -18,6 +18,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -43,9 +44,9 @@ var (
 	writeClient influxdb2.Client
 	queryJson   string
 
-	url    = os.Getenv("INFLUXDB_HOST")
-	orgId  = os.Getenv("INFLUXDB_ORGANIZATION_ID")
-	bucket = os.Getenv("INFLUX_BUCKET")
+	hostUrl = os.Getenv("INFLUXDB_HOST")
+	orgId   = os.Getenv("INFLUXDB_ORGANIZATION_ID")
+	bucket  = os.Getenv("INFLUX_BUCKET")
 )
 
 const loginDatabase = "logins.db"
@@ -71,12 +72,12 @@ func getLoginDB() (*sql.DB, error) {
 			UNIQUE (email))`
 		_, err = db.Exec(create)
 		if err != nil {
-			return db, fmt.Errorf("login table create failed: %q", err)
+			return db, fmt.Errorf("login table create failed: %s", err)
 		}
 
 		const defaultLoginMessage = `
 Creating default user with login:
-	Email: mickey@mouse.com
+	Email: mickey@example.com
 	Password: pass
 Note that this account will not be able to access your influxdb organization.`
 
@@ -84,7 +85,7 @@ Note that this account will not be able to access your influxdb organization.`
 
 		insert := `INSERT INTO user VALUES(
 			1,
-			'mickey@mouse.com',
+			'mickey@example.com',
 			'sha256$d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1',
 			'mickey',
 			'my_read_token',
@@ -140,8 +141,8 @@ func tryLoginCredentials(db *sql.DB, user string, plainPassword string) error {
 		activeUser = newUser
 
 		// Update our read/write clients since we just retrieved the tokens.
-		readClient = influxdb2.NewClient(url, readToken)
-		writeClient = influxdb2.NewClient(url, writeToken)
+		readClient = influxdb2.NewClient(hostUrl, readToken)
+		writeClient = influxdb2.NewClient(hostUrl, writeToken)
 
 		return nil
 	}
@@ -222,7 +223,7 @@ func loginHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 		case "POST":
 			email := r.FormValue("email")
 			password := r.FormValue("password")
-			fmt.Printf("Login post, retrieved credientials: email:%s, password:%s\n", email, password)
+			fmt.Printf("Login post, retrieved credientials: email:%s\n", email)
 
 			// Query the login database to see if the credentials match.
 			if err := tryLoginCredentials(db, email, password); err == nil {
@@ -254,6 +255,8 @@ func queryDataHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := queryData(readClient)
 	if err != nil {
 		fmt.Printf("Query failed: %q\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("%q", err)))
 		return
 	}
 
@@ -275,14 +278,20 @@ func queryDataHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		firstTable = false
 		pairs := strings.Split(data.Record().String(), ",")
-		record := make(map[string]string)
+		valueString := ""
 		for _, pair := range pairs {
 			kv := strings.Split(pair, ":")
-			record[kv[0]] = kv[1]
+			if kv[0] != "_value" {
+				continue
+			}
+			valueString = kv[1]
+		}
+		if valueString == "" {
+			break // invalid data
 		}
 
 		// We're only interested in the _value entries here.
-		value, _ := strconv.ParseFloat(record["_value"], 32)
+		value, _ := strconv.ParseFloat(valueString, 32)
 		graphData[0].X = append(graphData[0].X, counter)
 		graphData[0].Y = append(graphData[0].Y, value)
 
@@ -294,17 +303,17 @@ func queryDataHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Query failed when marshalling data: %q\n", err)
 		return
 	}
-	queryJson = string(jsonBytes)
 
 	// Write out the json to the http body, this will update the HTML.
-	encoder := json.NewEncoder(w)
-	encoder.Encode(queryJson)
+	json.NewEncoder(w).Encode(string(jsonBytes))
 }
 
 func writeDataHandler(w http.ResponseWriter, r *http.Request) {
 	err := writeData(writeClient)
 	if err != nil {
 		fmt.Printf("Write failed: %q\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("%q", err)))
 		return
 	}
 }
@@ -321,8 +330,8 @@ func signupHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 			readToken := r.FormValue("readToken")
 			writeToken := r.FormValue("writeToken")
 
-			fmt.Printf("Registering new user: email=%s, name=%s, password=%s, readToken=%s, writeToken=%s\n",
-				email, name, password, readToken, writeToken)
+			fmt.Printf("Registering new user: email=%s, name=%s, readToken=%s, writeToken=%s\n",
+				email, name, readToken, writeToken)
 
 			if err := registerUser(db, email, name, password, readToken, writeToken); err != nil {
 				fmt.Println("Failed to register user:", err)
@@ -353,11 +362,18 @@ func main() {
 	}
 	defer db.Close()
 
-	// Ensure the influxdb url contains the https:// prefix. Add it if not.
-	httpsPrefix := "https://"
-	if !strings.Contains(url, httpsPrefix) {
-		url = strings.Join([]string{httpsPrefix, url}, "")
+	// Make sure the host URL has a scheme, and default to https if not.
+	parsedUrl, err := url.Parse(hostUrl)
+	if err != nil {
+		log.Fatalf("Host URL parsing failed: %q", err)
 	}
+	if len(parsedUrl.Path) == 0 {
+		log.Fatalf("Host URL does not contain a valid path.")
+	}
+	if !strings.EqualFold(parsedUrl.Scheme, "http") && !strings.EqualFold(parsedUrl.Scheme, "https") {
+		parsedUrl.Scheme = "https"
+	}
+	hostUrl = parsedUrl.String()
 
 	fmt.Println("Starting server at http://localhost:8080")
 
